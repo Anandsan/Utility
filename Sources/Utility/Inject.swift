@@ -27,7 +27,7 @@ public protocol Resolver {
 public class DIInject {
     private let parent: Resolver?
     fileprivate var components = [String: DIComponent]()
-    
+    let queue = DispatchQueue(label: "DIInject queue", attributes: .concurrent)
     public init(parent: Resolver? = nil) {
         self.parent = parent
     }
@@ -38,6 +38,12 @@ public class DIInject {
         instance.register { DIComponent(.container) { instance as Resolver } }
         return instance
     }
+    
+    fileprivate func builder(for name: String) -> DIComponent? {
+        queue.sync(flags: .barrier) {
+            components[name]
+        }
+    }
 
 }
 
@@ -45,16 +51,22 @@ public class DIInject {
 // MARK: Inject implement Resolver
 extension DIInject: Resolver {
     
-    public func register(@Builder _ component: () -> DIComponent){
-        let component = component()
-        if components[component.name] != nil {
-            print("'\(component.name)' is already registered and now overriding it")
+    public func register(@Builder _ factory: () -> DIComponent){
+        let factory = factory()
+        if let _ = builder(for: factory.name) {
+            print("'\(factory.name)' is already registered and now overriding it")
         }
-        components[component.name] = component
+        queue.sync(flags: .barrier) {
+            components[factory.name] = factory
+        }
+        
     }
     
     public func unregister(_ type: Any.Type) {
-        components.removeValue(forKey: String(describing: type))
+        let _ =  queue.sync(flags: .barrier) {
+            components.removeValue(forKey: String(describing: type))
+        }
+        
     }
     
     public func component<T>() -> T? {
@@ -64,8 +76,8 @@ extension DIInject: Resolver {
     
     public func component<T>(for name: String?) -> T? {
         let name = name ?? String(describing: T.self)
-        let component = components[name]
-        if let object:T = component?.resolveObject() {
+        let builder = builder(for: name)
+        if let object:T = builder?.resolveObject() {
             return object
         }
         if let object:T =  parent?.component(for: name) {
